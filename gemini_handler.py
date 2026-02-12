@@ -2,6 +2,7 @@
 import os
 import google.generativeai as genai
 import json
+import re
 from datetime import datetime
 
 # Gemini APIキーの設定
@@ -27,10 +28,12 @@ safety_settings = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
 ]
 
+# ▼▼▼ 修正1: バージョン付きのモデル名に変更 ▼▼▼
+# もしこれでもダメなら "gemini-pro" (1.0) を試してみてください
+MODEL_NAME = "gemini-1.5-flash-001" 
+
 model = genai.GenerativeModel(
-    # 修正前: "gemini-1.5-flash-latest"
-    # 修正後: "gemini-1.5-flash"
-    model_name="gemini-2.5-flash",
+    model_name=MODEL_NAME,
     generation_config=generation_config,
     safety_settings=safety_settings
 )
@@ -72,7 +75,6 @@ async def parse_event_details(text: str) -> tuple[dict | None, str | None]:
     戻り値: (イベント情報の辞書, エラーメッセージ)
     """
     prompt = _create_prompt(text)
-    response_text = ""
     
     try:
         response = await model.generate_content_async(prompt)
@@ -87,7 +89,6 @@ async def parse_event_details(text: str) -> tuple[dict | None, str | None]:
         json_str = match.group(0)
         event_data = json.loads(json_str)
         
-        # 必須項目のチェック
         if not event_data.get("summary"):
             return None, f"summary(予定のタイトル)が取得できませんでした。\nRaw: {json_str}"
             
