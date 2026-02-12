@@ -94,6 +94,15 @@ async def parse_event_details(text: str) -> tuple[dict | None, str | None]:
         return event_data, None
 
     except json.JSONDecodeError as e:
-        return None, f"JSON解析エラー: {e}\nRaw: {response_text[:500]}"
+        return None, f"JSON解析エラー: {e}\nRaw: {response_text[:500] if 'response_text' in locals() else 'None'}"
     except Exception as e:
-        return None, f"予期せぬエラー: {e}\nRaw: {response_text[:500] if 'response_text' in locals() else 'None'}"
+        # ▼▼▼ 修正2: エラー時に利用可能なモデル一覧を表示してデバッグしやすくする ▼▼▼
+        error_msg = f"予期せぬエラー: {e}"
+        if "404" in str(e) or "not found" in str(e):
+            try:
+                available_models = [m.name for m in genai.list_models()]
+                error_msg += f"\n\n【デバッグ情報】利用可能なモデル一覧:\n{', '.join(available_models)}"
+            except Exception as list_error:
+                error_msg += f"\n(モデル一覧の取得にも失敗: {list_error})"
+        
+        return None, error_msg
