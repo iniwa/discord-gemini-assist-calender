@@ -30,7 +30,7 @@ safety_settings = [
 
 # ▼▼▼ 修正1: バージョン付きのモデル名に変更 ▼▼▼
 # もしこれでもダメなら "gemini-pro" (1.0) を試してみてください
-MODEL_NAME = "gemini-1.5-flash-001" 
+MODEL_NAME = "gemini-2.0-flash" 
 
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
