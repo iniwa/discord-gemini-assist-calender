@@ -11,8 +11,9 @@ def init_db():
     # データディレクトリが存在しない場合は作成
     os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
     
-    if os.path.exists(DB_FILE):
-        return
+    # 削除: ファイルが存在しても、テーブルがあるとは限らないのでチェックを外す
+    # if os.path.exists(DB_FILE):
+    #    return
     
     with db_lock:
         conn = sqlite3.connect(DB_FILE)
