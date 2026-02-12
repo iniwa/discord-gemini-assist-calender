@@ -127,14 +127,14 @@ Botがあなたの次のメッセージを待機する状態になります。""
     )
     embed.add_field(
         name="ステップ2: 予定を送信",
-        value="待機状態で、カレンダーに登録したい予定を自然な文章で送信します。
-例: `明日の15時から1時間、山田さんと打ち合わせ。場所は第3会議室。`",
+        value="""待機状態で、カレンダーに登録したい予定を自然な文章で送信します。
+例: `明日の15時から1時間、山田さんと打ち合わせ。場所は第3会議室。`""",
         inline=False
     )
     embed.add_field(
         name="ステップ3: Google認証 (初回のみ)",
-        value="BotからGoogleアカウント連携のためのURLがDMで送られてきます。
-URLにアクセスし、連携を許可してください。",
+        value="""BotからGoogleアカウント連携のためのURLがDMで送られてきます。
+URLにアクセスし、連携を許可してください。""",
         inline=False
     )
     embed.add_field(
@@ -239,8 +239,8 @@ async def on_message(message: discord.Message):
         # 2. Gemini APIで予定を解析
         event_details = await gemini_handler.parse_event_details(message.content)
         if not event_details:
-            await message.reply("うーん、うまく内容を読み取れませんでした...。
-もう少し具体的に書いてもう一度試してもらえますか？")
+            await message.reply("""うーん、うまく内容を読み取れませんでした...。
+もう少し具体的に書いてもう一度試してもらえますか？""")
             return
 
         # 3. Google Calendar APIでイベント作成
