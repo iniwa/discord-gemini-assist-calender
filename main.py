@@ -211,7 +211,7 @@ async def on_message(message: discord.Message):
     
     # トークンが無い、または空の場合は認証フローへ
     if not creds_json:
-        auth_url = gcal.get_auth_url() + f"&state={discord_id}"
+        auth_url = gcal.get_auth_url(state=discord_id)
         
         try:
             dm_channel = await message.author.create_dm()
