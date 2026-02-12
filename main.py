@@ -242,11 +242,19 @@ async def on_message(message: discord.Message):
     db.clear_user_state(discord_id)
     
     async with message.channel.typing():
-        # 2. Gemini APIで予定を解析
-        event_details = await gemini_handler.parse_event_details(message.content)
+        # 2. Gemini APIで予定を解析 (戻り値を2つ受け取る)
+        event_details, error_msg = await gemini_handler.parse_event_details(message.content)
+        
+        # ▼▼▼ エラーハンドリング追加 ▼▼▼
+        if error_msg:
+            # デバッグ用にエラー詳細を表示
+            await message.reply(f"⚠️ 解析エラーが発生しました:\n```text\n{error_msg}\n```")
+            return
+        # ▲▲▲ 追加ここまで ▲▲▲
+
         if not event_details:
-            await message.reply("""うーん、うまく内容を読み取れませんでした...。
-`/calendar` からやり直して、もう少し具体的に書いてもらえますか？""")
+            # 万が一 event_details も error_msg も None の場合（通常ありえないが念のため）
+            await message.reply("不明なエラーで内容を読み取れませんでした。")
             return
 
         # 3. Google Calendar APIでイベント作成

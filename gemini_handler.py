@@ -38,66 +38,60 @@ def _create_prompt(text: str) -> str:
     today = datetime.now().strftime('%Y-%m-%d')
     return f"""
     あなたはユーザーのチャット発言からスケジュールを抽出する有能な秘書です。
-    ゲームの予定、食事、作業、遊びなど、あらゆる活動をカレンダーイベントとして抽出してください。
-
+    
     # 入力テキスト
     {text}
 
     # 今日の日付
-    {today} (これを基準に「明日」「来週」などを判定)
+    {today}
 
-    # 抽出ルール (最優先)
-    1. **概要 (summary)**: 
-       - 「Enshroudやる」「飲み会」など、活動内容を短いタイトルにしてください。
-    2. **時間補完**:
-       - 開始時刻のみで終了時刻がない場合 -> **開始時刻の1時間後** を終了時刻として設定してください。
-       - 時刻がない場合 -> 終日イベント (null) にしてください。
-    3. **柔軟な解釈**:
-       - 文脈から日付が特定できない場合のみ、今日の日付を使用してください。
-       - 多少曖昧でも、可能な限り情報を埋めてJSONを生成してください。errorを返すのは、文章が全く意味不明な場合だけにしてください。
+    # 指示
+    ユーザーの発言を解析し、以下のJSONフォーマットで出力してください。
+    - 日付や時間が明示されていない場合は、文脈から推測するか、nullにしてください。
+    - 予定の内容 (summary) は必須です。
+    - JSON以外の余計な説明は一切不要です。
 
-    # 出力フォーマット (JSON)
+    ```json
     {{
-      "summary": "イベント名 (必須)",
-      "location": "場所 (任意, なければnull)",
-      "description": "原文や補足 (任意, なければnull)",
+      "summary": "イベント名",
+      "location": "場所 (任意)",
+      "description": "詳細 (任意)",
       "start_date": "YYYY-MM-DD",
-      "start_time": "HH:MM:SS (または null)",
+      "start_time": "HH:MM:SS",
       "end_date": "YYYY-MM-DD",
-      "end_time": "HH:MM:SS (または null)"
+      "end_time": "HH:MM:SS"
     }}
+    ```
     """
 
-async def parse_event_details(text: str) -> dict | None:
+async def parse_event_details(text: str) -> tuple[dict | None, str | None]:
     """
-    テキストからカレンダーのイベント詳細を抽出し、JSON形式で返す
+    テキストからカレンダーのイベント詳細を抽出する。
+    戻り値: (イベント情報の辞書, エラーメッセージ)
     """
     prompt = _create_prompt(text)
+    response_text = ""
+    
     try:
         response = await model.generate_content_async(prompt)
+        response_text = response.text
         
-        # ▼▼▼ 修正: 正規表現で { ... } のブロックを探し出す強力なクリーニング ▼▼▼
-        match = re.search(r"\{.*\}", response.text, re.DOTALL)
-        if match:
-            cleaned_response_text = match.group(0)
-            event_data = json.loads(cleaned_response_text)
-        else:
-            # JSONが見つからない場合
-            print(f"JSON not found in response: {response.text}")
-            return None
-        # ▲▲▲ 修正ここまで ▲▲▲
+        # 正規表現でJSONブロック({ ... })を抽出
+        match = re.search(r"\{.*\}", response_text, re.DOTALL)
         
-        # エラーキーがあるか、または必須のsummaryがない場合はNoneを返す
-        if "error" in event_data:
-            return None
-        if not event_data.get("summary"):
-            return None
-        
-        return event_data
+        if not match:
+            return None, f"JSONが見つかりませんでした。\nRaw: {response_text[:500]}"
 
+        json_str = match.group(0)
+        event_data = json.loads(json_str)
+        
+        # 必須項目のチェック
+        if not event_data.get("summary"):
+            return None, f"summary(予定のタイトル)が取得できませんでした。\nRaw: {json_str}"
+            
+        return event_data, None
+
+    except json.JSONDecodeError as e:
+        return None, f"JSON解析エラー: {e}\nRaw: {response_text[:500]}"
     except Exception as e:
-        print(f"Error in Gemini API call: {e}")
-        # デバッグ用にエラー時のレスポンスを表示
-        if 'response' in locals():
-            print(f"Raw response: {response.text}")
-        return None
+        return None, f"予期せぬエラー: {e}\nRaw: {response_text[:500] if 'response_text' in locals() else 'None'}"
