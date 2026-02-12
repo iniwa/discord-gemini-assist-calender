@@ -198,11 +198,11 @@ async def on_message(message: discord.Message):
             try:
                 dm_channel = await message.author.create_dm()
                 await dm_channel.send(
-                    f"こんにちは！カレンダー登録のためにGoogleアカウントとの連携をお願いします。
-"
-                    f"以下のURLにアクセスして認証を完了してください。
+                    f"""こんにちは！カレンダー登録のためにGoogleアカウントとの連携をお願いします。
 
-{auth_url}"
+以下のURLにアクセスして認証を完了してください。
+
+{auth_url}"""
                 )
                 webbrowser.open(auth_url)
             except discord.Forbidden:
