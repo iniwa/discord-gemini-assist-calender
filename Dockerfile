@@ -22,6 +22,9 @@ WORKDIR /usr/src/app
 
 # Create a non-root user for security
 RUN useradd -m -s /bin/bash appuser
+# ▼▼▼ 追加: データの保存先ディレクトリを作成し、所有権をappuserに変更する ▼▼▼
+RUN mkdir -p /data && chown -R appuser:appuser /data
+# ▲▲▲ 追加ここまで ▲▲▲
 USER appuser
 
 # Copy installed dependencies from the builder stage
