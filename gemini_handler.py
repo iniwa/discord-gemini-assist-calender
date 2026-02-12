@@ -75,10 +75,17 @@ async def parse_event_details(text: str) -> dict | None:
     prompt = _create_prompt(text)
     try:
         response = await model.generate_content_async(prompt)
-        # レスポンスのクリーニング (Markdown記法への対策)
-        cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         
-        event_data = json.loads(cleaned_response_text)
+        # ▼▼▼ 修正: 正規表現で { ... } のブロックを探し出す強力なクリーニング ▼▼▼
+        match = re.search(r"\{.*\}", response.text, re.DOTALL)
+        if match:
+            cleaned_response_text = match.group(0)
+            event_data = json.loads(cleaned_response_text)
+        else:
+            # JSONが見つからない場合
+            print(f"JSON not found in response: {response.text}")
+            return None
+        # ▲▲▲ 修正ここまで ▲▲▲
         
         # エラーキーがあるか、または必須のsummaryがない場合はNoneを返す
         if "error" in event_data:
