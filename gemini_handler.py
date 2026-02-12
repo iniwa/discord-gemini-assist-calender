@@ -98,7 +98,6 @@ if __name__ == '__main__':
             print(f"--- Testing: {case} ---")
             result = await parse_event_details(case)
             print(json.dumps(result, indent=2, ensure_ascii=False))
-            print("
-")
+            print()
 
     asyncio.run(main_test())
