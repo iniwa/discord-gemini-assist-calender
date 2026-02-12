@@ -1,0 +1,31 @@
+version: '3.8'
+
+# This configuration is designed for Portainer Stacks.
+# In the Portainer Stack editor's "Advanced options",
+# you can set the environment variables listed below.
+
+services:
+  discord-calendar-bot:
+    # Get the latest image from GitHub Container Registry.
+    image: ghcr.io/iniwa/discord-gemini-assist-calender:latest
+    container_name: discord-calendar-bot
+    restart: unless-stopped
+    
+    # In Portainer, you will need to define the following environment variables
+    # in the "Environment variables" section for the stack.
+    environment:
+      - DISCORD_BOT_TOKEN=your_discord_bot_token
+      - GEMINI_API_KEY=your_gemini_api_key
+      - GOOGLE_CREDENTIALS_JSON=your_google_credentials_json_content
+      - CALENDAR_ID=primary
+      
+    # Mount a volume to persist the 'token.json' file.
+    # This file is created after the first successful Google authentication
+    # and prevents you from having to re-authenticate every time the container restarts.
+    # Replace `/path/to/your/appdata/discord-calendar-bot` with an absolute path on your host machine.
+    volumes:
+      - /path/to/your/appdata/discord-calendar-bot:/usr/src/app
+      
+    # It is good practice to run the container as a non-root user.
+    # Replace '1000:1000' with your host user's UID:GID if necessary.
+    user: "1000:1000"
