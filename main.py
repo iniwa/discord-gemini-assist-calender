@@ -121,8 +121,8 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(
         name="ステップ1: 登録準備",
-        value="`/calendar` とコマンドを送信してください。
-Botがあなたの次のメッセージを待機する状態になります。",
+        value="""`/calendar` とコマンドを送信してください。
+Botがあなたの次のメッセージを待機する状態になります。""",
         inline=False
     )
     embed.add_field(
