@@ -1,6 +1,7 @@
 # google_calendar.py
 import os
 import json
+import datetime  # 追加: 時間計算用
 from typing import Dict, Any
 
 import google.oauth2.credentials
@@ -25,17 +26,13 @@ def create_oauth_flow() -> Flow:
     )
     return flow
 
-# ▼▼▼ 修正箇所: state引数を追加し、authorization_urlに渡す ▼▼▼
 def get_auth_url(state: str = None) -> str:
     """ユーザーに提示する認証URLを生成する"""
     flow = create_oauth_flow()
-    # stateが指定されていればそれを使い、なければライブラリが自動生成する
     auth_url, _ = flow.authorization_url(prompt='consent', state=state)
     return auth_url
-# ▲▲▲ 修正ここまで ▲▲▲
 
 def get_credentials_from_code(code: str) -> str:
-# ... (以降の関数は変更なし) ...
     """認証コードから資格情報(JSON文字列)を取得する"""
     flow = create_oauth_flow()
     flow.fetch_token(code=code)
@@ -75,29 +72,62 @@ def get_calendar_service(creds_json: str) -> tuple[Resource | None, str | None]:
         print(f'An error occurred: {error}')
         return None, None
 
-def create_calendar_event(service: Resource, event_details: Dict[str, Any]) -> Dict[str, Any] | None:
+# ▼▼▼ 修正箇所: 戻り値を (イベント, エラーメッセージ) に変更し、時間補完ロジックを追加 ▼▼▼
+def create_calendar_event(service: Resource, event_details: Dict[str, Any]) -> tuple[Dict[str, Any] | None, str | None]:
     event_body = {
         'summary': event_details.get('summary'),
         'location': event_details.get('location'),
         'description': event_details.get('description'),
     }
-    if event_details.get('start_time') and event_details.get('end_time'):
+
+    start_date = event_details.get('start_date')
+    start_time = event_details.get('start_time')
+    end_date = event_details.get('end_date')
+    end_time = event_details.get('end_time')
+
+    # 時間指定がある場合
+    if start_time:
+        # 終了時間がない場合、開始時間の1時間後に自動設定する (救済措置)
+        if not end_time:
+            try:
+                dt_start = datetime.datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # 秒がない場合(HH:MM)のケア
+                try:
+                    dt_start = datetime.datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+                except ValueError as e:
+                    return None, f"時間のフォーマットエラー: {e}"
+            
+            dt_end = dt_start + datetime.timedelta(hours=1)
+            end_date = dt_end.strftime("%Y-%m-%d")
+            end_time = dt_end.strftime("%H:%M:%S")
+
         event_body['start'] = {
-            'dateTime': f"{event_details['start_date']}T{event_details['start_time']}",
+            'dateTime': f"{start_date}T{start_time}",
             'timeZone': 'Asia/Tokyo',
         }
         event_body['end'] = {
-            'dateTime': f"{event_details['end_date']}T{event_details['end_time']}",
+            'dateTime': f"{end_date}T{end_time}",
             'timeZone': 'Asia/Tokyo',
         }
+    
+    # 終日イベントの場合
     else:
-        event_body['start'] = {'date': event_details['start_date']}
-        event_body['end'] = {'date': event_details['end_date']}
+        event_body['start'] = {'date': start_date}
+        # 終日イベントで終了日がない、または開始日と同じ場合、Googleカレンダー仕様に合わせて+1日する
+        if not end_date or end_date == start_date:
+            try:
+                dt_start = datetime.datetime.strptime(start_date, "%Y-%m-%d")
+                dt_end = dt_start + datetime.timedelta(days=1)
+                end_date = dt_end.strftime("%Y-%m-%d")
+            except ValueError as e:
+                 return None, f"日付のフォーマットエラー: {e}"
+                 
+        event_body['end'] = {'date': end_date}
 
     try:
         event = service.events().insert(calendarId='primary', body=event_body).execute()
-        print(f"Event created: {event.get('htmlLink')}")
-        return event
+        return event, None
     except HttpError as error:
-        print(f'An error occurred while creating event: {error}')
-        return None
+        error_content = error.content.decode('utf-8') if error.content else str(error)
+        return None, f"Google API Error: {error_content}"

@@ -9,6 +9,7 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import logging
+import json
 
 # ローカルモジュールのインポート
 import database as db
@@ -242,33 +243,36 @@ async def on_message(message: discord.Message):
     db.clear_user_state(discord_id)
     
     async with message.channel.typing():
-        # 2. Gemini APIで予定を解析 (戻り値を2つ受け取る)
-        event_details, error_msg = await gemini_handler.parse_event_details(message.content)
+        # 2. Gemini APIで予定を解析
+        event_details, gemini_error = await gemini_handler.parse_event_details(message.content)
         
-        # ▼▼▼ エラーハンドリング追加 ▼▼▼
-        if error_msg:
-            # デバッグ用にエラー詳細を表示
-            await message.reply(f"⚠️ 解析エラーが発生しました:\n```text\n{error_msg}\n```")
+        # Geminiのエラーハンドリング
+        if gemini_error:
+            await message.reply(f"⚠️ **解析失敗 (Gemini)**\nAIからの応答:\n```text\n{gemini_error}\n```")
             return
-        # ▲▲▲ 追加ここまで ▲▲▲
 
         if not event_details:
-            # 万が一 event_details も error_msg も None の場合（通常ありえないが念のため）
-            await message.reply("不明なエラーで内容を読み取れませんでした。")
+            await message.reply("エラー: 解析結果が空でした。")
             return
+
+        # ▼▼▼ デバッグ表示: AIが読み取った内容を表示する ▼▼▼
+        json_debug = json.dumps(event_details, indent=2, ensure_ascii=False)
+        debug_msg = await message.reply(f"🤖 **解析成功！この内容で登録を試みます:**\n```json\n{json_debug}\n```")
+        # ▲▲▲ 追加ここまで ▲▲▲
 
         # 3. Google Calendar APIでイベント作成
         service, updated_creds_json = gcal.get_calendar_service(creds_json)
         
         if updated_creds_json:
-            db.save_token(discord_id, updated_creds_json) # リフレッシュされたトークンを保存
+            db.save_token(discord_id, updated_creds_json)
 
         if not service:
             await message.reply("Googleカレンダーへのアクセスに失敗しました（認証切れの可能性があります）。再度 `/calendar` から認証を行ってください。")
-            db.save_token(discord_id, "") # 無効なトークンを削除
+            db.save_token(discord_id, "")
             return
             
-        created_event = gcal.create_calendar_event(service, event_details)
+        # イベント作成実行 (戻り値が変わりました)
+        created_event, calendar_error = gcal.create_calendar_event(service, event_details)
 
         # 4. 結果をユーザーに通知
         if created_event and created_event.get('htmlLink'):
@@ -280,9 +284,12 @@ async def on_message(message: discord.Message):
             embed.add_field(name="日時", value=f"{event_details['start_date']} {event_details.get('start_time', '終日')}", inline=False)
             embed.add_field(name="場所", value=event_details.get('location', '指定なし'), inline=False)
             embed.add_field(name="リンク", value=f"[カレンダーで表示]({created_event['htmlLink']})", inline=False)
+            
             await message.reply(embed=embed)
+            # 成功したらデバッグメッセージは消してもいいですが、確認用に残しておきます
         else:
-            await message.reply("カレンダーへの登録に失敗しました。")
+            # ▼▼▼ エラー詳細を表示 ▼▼▼
+            await message.reply(f"❌ **カレンダー登録エラー**\nGoogleからのエラーメッセージ:\n```text\n{calendar_error}\n```")
 
 
 # -------------------------------------
