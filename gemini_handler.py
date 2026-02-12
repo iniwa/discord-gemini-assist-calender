@@ -37,25 +37,35 @@ def _create_prompt(text: str) -> str:
     """Gemini APIに送信するためのプロンプトを作成する"""
     today = datetime.now().strftime('%Y-%m-%d')
     return f"""
-    以下のテキストを解析し、Googleカレンダーのイベント情報としてJSON形式で抽出してください。
+    あなたはユーザーのチャット発言からスケジュールを抽出する有能な秘書です。
+    ゲームの予定、食事、作業、遊びなど、あらゆる活動をカレンダーイベントとして抽出してください。
 
-    # 制約条件
-    - 今日の日付は {today} です。これを基準に相対的な日付（「明日」「来週の月曜」など）を解釈してください。
-    - 時刻が指定されていない場合は、終日イベントとして扱ってください。
-    - 終日イベントの場合、`start_time`と`end_time`は`null`にしてください。`end_date`は`start_date`の翌日に設定してください。
-    - 時間が指定されている場合、`start_date`と`end_date`は同じ日付にしてください。終了時刻が不明な場合は、開始時刻の1時間後を終了時刻としてください。
-    - 出力は必ずJSON形式で、以下のキーを含めてください。
-      - `summary`: イベントのタイトル（必須）
-      - `location`: 場所（任意）
-      - `description`: 詳細な説明（任意）
-      - `start_date`: 開始日 (YYYY-MM-DD)
-      - `start_time`: 開始時刻 (HH:MM:SS)
-      - `end_date`: 終了日 (YYYY-MM-DD)
-      - `end_time`: 終了時刻 (HH:MM:SS)
-    - どの項目にも該当しない、または情報が不足していてイベントが作成できない場合は、`"error": "情報が不足しています"` というJSONを返してください。
-
-    # テキスト
+    # 入力テキスト
     {text}
+
+    # 今日の日付
+    {today} (これを基準に「明日」「来週」などを判定)
+
+    # 抽出ルール (最優先)
+    1. **概要 (summary)**: 
+       - 「Enshroudやる」「飲み会」など、活動内容を短いタイトルにしてください。
+    2. **時間補完**:
+       - 開始時刻のみで終了時刻がない場合 -> **開始時刻の1時間後** を終了時刻として設定してください。
+       - 時刻がない場合 -> 終日イベント (null) にしてください。
+    3. **柔軟な解釈**:
+       - 文脈から日付が特定できない場合のみ、今日の日付を使用してください。
+       - 多少曖昧でも、可能な限り情報を埋めてJSONを生成してください。errorを返すのは、文章が全く意味不明な場合だけにしてください。
+
+    # 出力フォーマット (JSON)
+    {{
+      "summary": "イベント名 (必須)",
+      "location": "場所 (任意, なければnull)",
+      "description": "原文や補足 (任意, なければnull)",
+      "start_date": "YYYY-MM-DD",
+      "start_time": "HH:MM:SS (または null)",
+      "end_date": "YYYY-MM-DD",
+      "end_time": "HH:MM:SS (または null)"
+    }}
     """
 
 async def parse_event_details(text: str) -> dict | None:
@@ -65,39 +75,22 @@ async def parse_event_details(text: str) -> dict | None:
     prompt = _create_prompt(text)
     try:
         response = await model.generate_content_async(prompt)
-        # レスポンスがJSON形式でない場合や、予期せぬ形式の場合があるためパースを試みる
-        # response.textは時にマークダウン(` ```json ... ``` `)で返ることがある
-        cleaned_response_text = response.text.strip().removeprefix("```json").removesuffix("```").strip()
+        # レスポンスのクリーニング (Markdown記法への対策)
+        cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         
         event_data = json.loads(cleaned_response_text)
         
         # エラーキーがあるか、または必須のsummaryがない場合はNoneを返す
-        if "error" in event_data or not event_data.get("summary"):
+        if "error" in event_data:
+            return None
+        if not event_data.get("summary"):
             return None
         
         return event_data
 
     except Exception as e:
         print(f"Error in Gemini API call: {e}")
-        print(f"Raw response from Gemini: {response.text if 'response' in locals() else 'No response'}")
+        # デバッグ用にエラー時のレスポンスを表示
+        if 'response' in locals():
+            print(f"Raw response: {response.text}")
         return None
-
-if __name__ == '__main__':
-    # テスト用のコード
-    import asyncio
-
-    async def main_test():
-        test_cases = [
-            "明日の15時から1時間、山田さんと打ち合わせ。場所は第3会議室。",
-            "来週の月曜、終日で福岡出張",
-            "今日の夜、田中さんと会食",
-            "2月20日の10時からクライアントとの定例MTG。詳細は別途。",
-            "こんにちは"
-        ]
-        for case in test_cases:
-            print(f"--- Testing: {case} ---")
-            result = await parse_event_details(case)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
-            print()
-
-    asyncio.run(main_test())
