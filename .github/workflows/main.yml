@@ -1,14 +1,18 @@
-# .github/workflows/main.yml
-name: CI/CD for Discord Bot
+name: Docker Build and Push
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [ "main" ] # mainブランチへのプッシュで発動
+    # tags: [ 'v*.*.*' ] # タグプッシュ時にも発動させたい場合はコメントアウト解除
+  workflow_dispatch: # 手動実行も許可
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository は "iniwa/リポジトリ名" の形式で自動取得されます
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push-to-ghcr:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -18,25 +22,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # QEMUのセットアップ (これがないとRaspberry Pi用のARM64ビルドができません)
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
+      # Docker Buildxのセットアップ
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to the aContainer Registry
+      # GHCRへのログイン
+      - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # メタデータ(タグなど)の抽出
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+
+      # ビルドとプッシュ
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # ★重要: Raspberry Pi 4用に linux/arm64 を含める
+          platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
