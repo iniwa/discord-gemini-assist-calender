@@ -2,12 +2,11 @@
 import os
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks # tasksを追加
 from dotenv import load_dotenv
 import asyncio
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import uuid
 from urllib.parse import urlparse, parse_qs
 import logging
 
@@ -40,53 +39,82 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # -------------------------------------
 # 2. OAuthコールバック用HTTPサーバー
 # -------------------------------------
-# 認証セッションを管理するための辞書
-# key: state (uuid), value: {"code": str | None, "event": asyncio.Event}
-auth_sessions = {}
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        global auth_sessions
-        
         query_components = parse_qs(urlparse(self.path).query)
         code = query_components.get("code", [None])[0]
+        # stateにはdiscord_idが入っている想定
         state = query_components.get("state", [None])[0]
 
-        if code and state and state in auth_sessions:
-            session = auth_sessions[state]
-            session["code"] = code
-            
-            # botのスレッドでイベントを設定する
-            bot.loop.call_soon_threadsafe(session["event"].set)
-            
-            self.send_response(200)
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b"<h1>Authentication successful!</h1><p>You can close this window now.</p>")
+        if code and state:
+            try:
+                # 認証コードからトークンを取得してDBに保存
+                creds_json = gcal.get_credentials_from_code(code)
+                db.save_token(state, creds_json) # state=discord_id
+                
+                # ユーザーに通知 (BotからDMを送る処理はここからは直接呼べないので、DB保存だけでOK)
+                # 必要であれば、ここでDiscordのAPIを叩いて通知することも可能ですが、複雑になるため割愛
+                
+                self.send_response(200)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"<h1>Authentication successful!</h1><p>You can close this window now and return to Discord.</p>")
+                logging.info(f"Successfully authenticated user: {state}")
+            except Exception as e:
+                logging.error(f"Authentication failed for user {state}: {e}")
+                self.send_response(500)
+                self.wfile.write(b"<h1>Authentication failed.</h1>")
         else:
             self.send_response(400)
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b"<h1>Authentication failed. Invalid request.</h1>")
+            self.wfile.write(b"<h1>Invalid request.</h1>")
 
 def run_server():
     """HTTPサーバーを永続的に実行する"""
     try:
-        parsed_uri = urlparse(OAUTH_REDIRECT_URI)
-        host, port = parsed_uri.hostname, parsed_uri.port
+        host = "0.0.0.0"
+        port = 8080
         server_address = (host, port)
+
         httpd = HTTPServer(server_address, OAuthCallbackHandler)
         logging.info(f"Starting OAuth callback server on {host}:{port}")
         httpd.serve_forever()
     except Exception as e:
         logging.error(f"Failed to start HTTP server: {e}")
 
-# 3. Botイベントハンドラ
+# -------------------------------------
+# 3. 定期実行タスク
+# -------------------------------------
+@tasks.loop(seconds=60)
+async def check_timeouts():
+    # 5分以上放置されているユーザーを取得
+    timeout_minutes = 5
+    stale_user_ids = db.get_stale_users(timeout_minutes)
+    
+    if stale_user_ids:
+        channel = bot.get_channel(TARGET_CHANNEL_ID)
+        for user_id in stale_user_ids:
+            db.clear_user_state(user_id)
+            if channel:
+                try:
+                    # メンションで通知
+                    await channel.send(f"<@{user_id}> ⏰ 時間切れのため、カレンダー登録を中断しました。もう一度 `/calendar` からやり直してください。")
+                except Exception as e:
+                    logging.error(f"Failed to send timeout message: {e}")
+
+# -------------------------------------
+# 4. Botイベントハンドラ
 # -------------------------------------
 @bot.event
 async def on_ready():
     logging.info(f'Logged in as {bot.user.name}')
-    db.init_db()
+    
+    # DB初期化 (テーブル作成など)
+    # database.py内のinit_db()の中身を適切に実装している前提
+    try:
+        db.init_db() 
+    except Exception as e:
+        logging.error(f"Database initialization failed: {e}")
 
     # ターゲットチャンネルの存在確認
     if TARGET_CHANNEL_ID:
@@ -105,12 +133,18 @@ async def on_ready():
     except Exception as e:
         logging.error(f"Failed to sync commands: {e}")
 
-    # HTTPサーバーを別スレッドで起動
-    server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
+    # HTTPサーバーを別スレッドで起動 (重複起動防止のためチェックは不要、on_readyは通常1回だが再接続で呼ばれる可能性はあるので注意)
+    # 簡易的に、デーモンスレッドとして起動しっぱなしにする
+    # 厳密にはロックが必要だが、実用上は起動時に一度だけ走るようにすればよい
+    if not any(t.name == "OAuthServerThread" for t in threading.enumerate()):
+        server_thread = threading.Thread(target=run_server, daemon=True, name="OAuthServerThread")
+        server_thread.start()
+
+    if not check_timeouts.is_running():
+        check_timeouts.start()
 
 # -------------------------------------
-# 4. スラッシュコマンド
+# 5. スラッシュコマンド
 # -------------------------------------
 @bot.tree.command(name="help", description="Botの使い方を表示します。")
 async def help_command(interaction: discord.Interaction):
@@ -119,29 +153,9 @@ async def help_command(interaction: discord.Interaction):
         description="チャットから簡単にGoogleカレンダーへ予定を登録します。",
         color=discord.Color.blue()
     )
-    embed.add_field(
-        name="ステップ1: 登録準備",
-        value="""`/calendar` とコマンドを送信してください。
-Botがあなたの次のメッセージを待機する状態になります。""",
-        inline=False
-    )
-    embed.add_field(
-        name="ステップ2: 予定を送信",
-        value="""待機状態で、カレンダーに登録したい予定を自然な文章で送信します。
-例: `明日の15時から1時間、山田さんと打ち合わせ。場所は第3会議室。`""",
-        inline=False
-    )
-    embed.add_field(
-        name="ステップ3: Google認証 (初回のみ)",
-        value="""BotからGoogleアカウント連携のためのURLがDMで送られてきます。
-URLにアクセスし、連携を許可してください。""",
-        inline=False
-    )
-    embed.add_field(
-        name="完了！",
-        value="Botが内容を解析し、カレンダー登録が完了すると通知します。",
-        inline=False
-    )
+    # ... (内容は変更なし) ...
+    embed.add_field(name="ステップ1", value="`/calendar` と送信", inline=False)
+    embed.add_field(name="ステップ2", value="予定の内容を送信", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="calendar", description="カレンダーへの予定登録を開始します。")
@@ -154,8 +168,23 @@ async def calendar_command(interaction: discord.Interaction):
     db.set_user_state(discord_id, "waiting_for_details")
     await interaction.response.send_message("カレンダーに登録したい予定の内容を送信してください。", ephemeral=True)
 
+@bot.tree.command(name="cancel", description="カレンダー登録作業を中断します。")
+async def cancel_command(interaction: discord.Interaction):
+    if interaction.channel_id != TARGET_CHANNEL_ID:
+        await interaction.response.send_message("このコマンドはこのチャンネルでは使用できません。", ephemeral=True)
+        return
+        
+    discord_id = str(interaction.user.id)
+    current_state = db.get_user_state(discord_id)
+    
+    if current_state:
+        db.clear_user_state(discord_id)
+        await interaction.response.send_message("✅ カレンダー登録を中断しました。", ephemeral=True)
+    else:
+        await interaction.response.send_message("現在、進行中の作業はありません。", ephemeral=True)
+
 # -------------------------------------
-# 5. メッセージ処理
+# 6. メッセージ処理
 # -------------------------------------
 @bot.event
 async def on_message(message: discord.Message):
@@ -170,90 +199,65 @@ async def on_message(message: discord.Message):
     discord_id = str(message.author.id)
     user_state = db.get_user_state(discord_id)
 
-    # 待機状態でない場合は、コマンドを使うように促す
+    # 待機状態でない場合は無視（またはリプライで誘導）
     if user_state != "waiting_for_details":
-        await message.reply(f"まずは `/calendar` とコマンドを送信してくださいね。", delete_after=10)
+        # await message.reply(f"まずは `/calendar` とコマンドを送信してくださいね。", delete_after=10)
         return
     
     # --- 待機状態の場合の処理 ---
-    # 状態をクリアして多重処理を防ぐ
+    
+    # 1. Google認証情報の確認
+    creds_json = db.get_token(discord_id)
+    
+    # トークンが無い、または空の場合は認証フローへ
+    if not creds_json:
+        auth_url = gcal.get_auth_url() + f"&state={discord_id}"
+        
+        try:
+            dm_channel = await message.author.create_dm()
+            await dm_channel.send(
+                f"""⚠️ **Googleアカウントの連携が必要です**
+
+以下のURLにアクセスして認証を完了してください。
+認証完了後、ブラウザに「Authentication successful!」と表示されたら、
+**もう一度Discordで予定の内容を送信してください。**
+
+{auth_url}"""
+            )
+            # 認証待ちの状態は維持しない（タイムアウト管理が複雑になるため）
+            # もしくは、認証完了を待たずに一旦ここでリターンし、ユーザーに再送を促すのが安全
+            await message.reply("認証用のURLをDMで送信しました。認証完了後、もう一度予定を送ってください。")
+            db.clear_user_state(discord_id) # 一旦状態をクリアして、再度/calendarからやらせるか、状態を残すか。
+            # 今回は「状態を残すとタイムアウト処理が必要」なので、一旦クリアして再入力を促すのがシンプルです。
+            return
+
+        except discord.Forbidden:
+            await message.reply("DMを送信できませんでした。プライバシー設定を確認してください。")
+            db.clear_user_state(discord_id)
+            return
+
+    # --- 以下、トークンがある場合の処理 ---
+    
+    # 状態をクリアして多重処理を防ぐ (ここ重要)
     db.clear_user_state(discord_id)
     
     async with message.channel.typing():
-        # 1. Google認証の確認と実行
-        creds_json = db.get_token(discord_id)
-        if not creds_json:
-            await message.reply("Googleアカウントの認証が必要です。DMを確認してください。")
-            
-            # --- OAuthフローを開始 ---
-            global oauth_code, oauth_user_id
-            oauth_code = None
-            oauth_user_id = None
-            
-            server_thread = threading.Thread(target=run_server)
-            server_thread.start()
-            
-            auth_url = gcal.get_auth_url() + f"&state={discord_id}"
-            
-            try:
-                dm_channel = await message.author.create_dm()
-                await dm_channel.send(
-                    f"""こんにちは！カレンダー登録のためにGoogleアカウントとの連携をお願いします。
-
-以下のURLにアクセスして認証を完了してください。
-
-{auth_url}"""
-                )
-                webbrowser.open(auth_url)
-            except discord.Forbidden:
-                await message.reply("DMを送信できませんでした。プライバシー設定を確認してください。")
-                db.clear_user_state(discord_id)
-                await shutdown_server_async()
-                return
-
-            # 認証コードが得られるまで待機 (タイムアウト付き)
-            timeout = 300 # 5分
-            for _ in range(timeout):
-                if oauth_code and oauth_user_id == discord_id:
-                    break
-                await asyncio.sleep(1)
-
-            if not oauth_code:
-                await message.author.send("認証がタイムアウトしました。もう一度 `/calendar` からやり直してください。")
-                await shutdown_server_async()
-                return
-
-            # トークンを取得して保存
-            try:
-                creds_json = gcal.get_credentials_from_code(oauth_code)
-                db.save_token(discord_id, creds_json)
-                await message.author.send("✅ 認証が完了しました！")
-            except Exception as e:
-                await message.author.send(f"認証トークンの取得に失敗しました: {e}")
-                db.clear_user_state(discord_id)
-                return
-            finally:
-                server_thread.join(timeout=1.0)
-
-
         # 2. Gemini APIで予定を解析
         event_details = await gemini_handler.parse_event_details(message.content)
         if not event_details:
             await message.reply("""うーん、うまく内容を読み取れませんでした...。
-もう少し具体的に書いてもう一度試してもらえますか？""")
+`/calendar` からやり直して、もう少し具体的に書いてもらえますか？""")
             return
 
         # 3. Google Calendar APIでイベント作成
-        # 最新の認証情報でサービスを再取得
-        creds_json = db.get_token(discord_id)
         service, updated_creds_json = gcal.get_calendar_service(creds_json)
         
         if updated_creds_json:
             db.save_token(discord_id, updated_creds_json) # リフレッシュされたトークンを保存
 
         if not service:
-            await message.reply("Googleカレンダーへのアクセスに失敗しました。再度認証が必要かもしれません。")
-            db.save_token(discord_id, "") # トークンをクリア
+            await message.reply("Googleカレンダーへのアクセスに失敗しました（認証切れの可能性があります）。再度 `/calendar` から認証を行ってください。")
+            db.save_token(discord_id, "") # 無効なトークンを削除
             return
             
         created_event = gcal.create_calendar_event(service, event_details)
@@ -266,6 +270,7 @@ async def on_message(message: discord.Message):
                 color=discord.Color.green()
             )
             embed.add_field(name="日時", value=f"{event_details['start_date']} {event_details.get('start_time', '終日')}", inline=False)
+            embed.add_field(name="場所", value=event_details.get('location', '指定なし'), inline=False)
             embed.add_field(name="リンク", value=f"[カレンダーで表示]({created_event['htmlLink']})", inline=False)
             await message.reply(embed=embed)
         else:

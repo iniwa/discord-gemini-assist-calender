@@ -93,3 +93,17 @@ def clear_user_state(discord_id: str):
         cursor.execute("DELETE FROM user_states WHERE discord_id = ?", (discord_id,))
         conn.commit()
         conn.close()
+
+def get_stale_users(minutes: int) -> list[str]:
+    """指定した分数が経過した古い状態のユーザーIDリストを取得する"""
+    with db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        # SQLiteの datetime('now') はUTCなので注意。ここではシンプルに差分で見ます。
+        cursor.execute(f"""
+        SELECT discord_id FROM user_states 
+        WHERE timestamp < datetime('now', '-{minutes} minutes')
+        """)
+        results = cursor.fetchall()
+        conn.close()
+        return [r[0] for r in results]
