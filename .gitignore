@@ -1,0 +1,22 @@
+# .gitignore
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+
+# Docker
+docker-compose.yml
+
+# IDE/Editor
+.vscode/
+.idea/
+
+# secrets
+.env
+*.sqlite3
+client_secret.json
+token.json
