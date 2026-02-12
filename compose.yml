@@ -19,13 +19,15 @@ services:
       - GOOGLE_CREDENTIALS_JSON=your_google_credentials_json_content
       - CALENDAR_ID=primary
       
-    # Mount a volume to persist the 'token.json' file.
-    # This file is created after the first successful Google authentication
-    # and prevents you from having to re-authenticate every time the container restarts.
-    # Replace `/path/to/your/appdata/discord-calendar-bot` with an absolute path on your host machine.
+    # Mount a named volume to the /data directory for persistent database storage.
+    # This avoids host file permission issues.
     volumes:
-      - /path/to/your/appdata/discord-calendar-bot:/usr/src/app
+      - bot-data:/data
       
     # It is good practice to run the container as a non-root user.
     # Replace '1000:1000' with your host user's UID:GID if necessary.
     user: "1000:1000"
+
+# Define the named volume for persistent data.
+volumes:
+  bot-data:

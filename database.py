@@ -3,11 +3,14 @@ import sqlite3
 import os
 import threading
 
-DB_FILE = "tokens.sqlite3"
+DB_FILE = "/data/tokens.sqlite3"
 db_lock = threading.Lock()
 
 def init_db():
     """データベースの初期化を行う"""
+    # データディレクトリが存在しない場合は作成
+    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+    
     if os.path.exists(DB_FILE):
         return
     

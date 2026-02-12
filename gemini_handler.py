@@ -1,6 +1,6 @@
 # gemini_handler.py
 import os
-import google.generativeai as genai
+import google.genai as genai
 import json
 from datetime import datetime
 
