@@ -51,11 +51,13 @@ def _create_prompt(text: str) -> str:
     {today}
 
     # 指示
-    ユーザーの発言を解析し、以下のJSONフォーマットで出力してください。
+    - ユーザーの発言を解析し、JSONフォーマットで出力してください。
+    - 複数の予定が含まれる場合は、JSONの配列にしてください。
     - 日付や時間が明示されていない場合は、文脈から推測するか、nullにしてください。
     - 予定の内容 (summary) は必須です。
     - JSON以外の余計な説明は一切不要です。
 
+    # 出力形式 (単一の予定)
     ```json
     {{
       "summary": "イベント名",
@@ -67,12 +69,32 @@ def _create_prompt(text: str) -> str:
       "end_time": "HH:MM:SS"
     }}
     ```
+
+    # 出力形式 (複数の予定)
+    ```json
+    [
+      {{
+        "summary": "イベント名1",
+        "start_date": "YYYY-MM-DD",
+        "start_time": "HH:MM:SS",
+        "end_date": "YYYY-MM-DD",
+        "end_time": "HH:MM:SS"
+      }},
+      {{
+        "summary": "イベント名2",
+        "start_date": "YYYY-MM-DD",
+        "start_time": "HH:MM:SS",
+        "end_date": "YYYY-MM-DD",
+        "end_time": "HH:MM:SS"
+      }}
+    ]
+    ```
     """
 
-async def parse_event_details(text: str) -> tuple[dict | None, str | None]:
+async def parse_event_details(text: str) -> tuple[list[dict] | None, str | None]:
     """
     テキストからカレンダーのイベント詳細を抽出する。
-    戻り値: (イベント情報の辞書, エラーメッセージ)
+    戻り値: (イベント情報の辞書のリスト, エラーメッセージ)
     """
     prompt = _create_prompt(text)
     
@@ -80,19 +102,26 @@ async def parse_event_details(text: str) -> tuple[dict | None, str | None]:
         response = await model.generate_content_async(prompt)
         response_text = response.text
         
-        # 正規表現でJSONブロック({ ... })を抽出
-        match = re.search(r"\{.*\}", response_text, re.DOTALL)
-        
-        if not match:
-            return None, f"JSONが見つかりませんでした。\nRaw: {response_text[:500]}"
+        json_str = ""
+        # マークダウンブロックからJSONを抽出
+        match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", response_text)
+        if match:
+            json_str = match.group(1).strip()
+        else:
+            # マークダウンがない場合、レスポンス全体をJSONとして扱う
+            json_str = response_text.strip()
 
-        json_str = match.group(0)
-        event_data = json.loads(json_str)
+        events = json.loads(json_str)
         
-        if not event_data.get("summary"):
-            return None, f"summary(予定のタイトル)が取得できませんでした。\nRaw: {json_str}"
+        # 常にリストを返すように正規化
+        if isinstance(events, dict):
+            events = [events]
+        
+        # summaryの存在チェック
+        if not isinstance(events, list) or not all(isinstance(e, dict) and e.get("summary") for e in events):
+            return None, f"summary(予定のタイトル)が取得できない、または不正な形式のデータです。\nRaw: {json_str}"
             
-        return event_data, None
+        return events, None
 
     except json.JSONDecodeError as e:
         return None, f"JSON解析エラー: {e}\nRaw: {response_text[:500] if 'response_text' in locals() else 'None'}"
