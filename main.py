@@ -257,10 +257,10 @@ async def on_message(message: discord.Message):
 
         # ▼▼▼ デバッグ表示: AIが読み取った内容を表示する ▼▼▼
         json_debug = json.dumps(event_details, indent=2, ensure_ascii=False)
-        debug_msg = await message.reply(f"🤖 **解析成功！この内容で登録を試みます:**\n```json\n{json_debug}\n```")
+        await message.reply(f"🤖 **解析成功！この内容で登録を試みます:**\n```json\n{json_debug}\n```")
         # ▲▲▲ 追加ここまで ▲▲▲
 
-        # 3. Google Calendar APIでイベント作成
+        # 3. Google Calendar APIの準備
         service, updated_creds_json = gcal.get_calendar_service(creds_json)
         
         if updated_creds_json:
@@ -271,25 +271,44 @@ async def on_message(message: discord.Message):
             db.save_token(discord_id, "")
             return
             
-        # イベント作成実行 (戻り値が変わりました)
-        created_event, calendar_error = gcal.create_calendar_event(service, event_details)
+        # 4. 各イベントをループで登録
+        success_count = 0
+        error_count = 0
+        total_events = len(event_details)
 
-        # 4. 結果をユーザーに通知
-        if created_event and created_event.get('htmlLink'):
-            embed = discord.Embed(
-                title="✅ カレンダーに登録しました！",
-                description=f"**{created_event['summary']}**",
-                color=discord.Color.green()
+        for i, event_data in enumerate(event_details, 1):
+            created_event, calendar_error = gcal.create_calendar_event(service, event_data)
+
+            if created_event and created_event.get('htmlLink'):
+                success_count += 1
+                embed = discord.Embed(
+                    title=f"✅ カレンダー登録成功 ({i}/{total_events})",
+                    description=f"**{created_event.get('summary', 'N/A')}**",
+                    color=discord.Color.green()
+                )
+                start_display = f"{event_data.get('start_date', '')} {event_data.get('start_time', '終日')}".strip()
+                embed.add_field(name="日時", value=start_display if start_display else "日時不明", inline=False)
+                embed.add_field(name="場所", value=event_data.get('location', '指定なし'), inline=False)
+                embed.add_field(name="リンク", value=f"[カレンダーで表示]({created_event['htmlLink']})", inline=False)
+                await message.reply(embed=embed)
+            else:
+                error_count += 1
+                error_embed = discord.Embed(
+                    title=f"❌ カレンダー登録エラー ({i}/{total_events})",
+                    description=f"予定: `{event_data.get('summary', 'N/A')}`",
+                    color=discord.Color.red()
+                )
+                error_embed.add_field(name="エラー詳細", value=f"```text\n{calendar_error}\n```", inline=False)
+                await message.reply(embed=error_embed)
+        
+        # 5. 最終結果のサマリー (複数の場合のみ)
+        if total_events > 1:
+            summary_embed = discord.Embed(
+                title="全件処理完了",
+                description=f"**{success_count}** 件成功、**{error_count}** 件失敗しました。",
+                color=discord.Color.blue()
             )
-            embed.add_field(name="日時", value=f"{event_details['start_date']} {event_details.get('start_time', '終日')}", inline=False)
-            embed.add_field(name="場所", value=event_details.get('location', '指定なし'), inline=False)
-            embed.add_field(name="リンク", value=f"[カレンダーで表示]({created_event['htmlLink']})", inline=False)
-            
-            await message.reply(embed=embed)
-            # 成功したらデバッグメッセージは消してもいいですが、確認用に残しておきます
-        else:
-            # ▼▼▼ エラー詳細を表示 ▼▼▼
-            await message.reply(f"❌ **カレンダー登録エラー**\nGoogleからのエラーメッセージ:\n```text\n{calendar_error}\n```")
+            await message.reply(embed=summary_embed)
 
 
 # -------------------------------------
