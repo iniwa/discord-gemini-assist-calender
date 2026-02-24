@@ -8,12 +8,19 @@ db_lock = threading.Lock()
 
 def init_db():
     """データベースの初期化を行う"""
-    # データディレクトリが存在しない場合は作成
     os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
 
     with db_lock:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
+
+        # ユーザーごとのカレンダーIDを保存するテーブル
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_calendars (
+            discord_id TEXT PRIMARY KEY,
+            calendar_id TEXT NOT NULL
+        )
+        """)
 
         # Botの対話状態を管理するテーブル
         cursor.execute("""
@@ -27,6 +34,44 @@ def init_db():
         conn.commit()
         conn.close()
         print("Database initialized.")
+
+# --- カレンダーID管理 ---
+
+def save_calendar_id(discord_id: str, calendar_id: str):
+    """ユーザーのカレンダーIDを保存または更新する"""
+    with db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO user_calendars (discord_id, calendar_id)
+        VALUES (?, ?)
+        ON CONFLICT(discord_id) DO UPDATE SET calendar_id=excluded.calendar_id
+        """, (discord_id, calendar_id))
+        conn.commit()
+        conn.close()
+
+def get_calendar_id(discord_id: str) -> str | None:
+    """ユーザーのカレンダーIDを取得する"""
+    with db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT calendar_id FROM user_calendars WHERE discord_id = ?", (discord_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+
+def delete_calendar_id(discord_id: str) -> bool:
+    """ユーザーのカレンダーIDを削除する。削除した場合Trueを返す。"""
+    with db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM user_calendars WHERE discord_id = ?", (discord_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+# --- 対話状態管理 ---
 
 def set_user_state(discord_id: str, state: str):
     """ユーザーの状態を設定する"""

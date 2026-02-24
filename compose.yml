@@ -7,10 +7,7 @@ services:
       - /home/iniwa/docker/discord-calendar/data:/data
     environment:
       - DISCORD_BOT_TOKEN=
-      - TARGET_CHANNEL_ID=
       - GEMINI_API_KEY=
-      # サービスアカウントのJSONキー内容を1行で設定 (改行は\nに変換)
+      # サービスアカウントのJSONキー内容を1行で設定
       - GOOGLE_CREDENTIALS_JSON=
-      # 対象カレンダーのID (メインカレンダーならGoogleアカウントのメールアドレス)
-      - CALENDAR_ID=primary
     user: "1000:1000"
