@@ -5,9 +5,8 @@ services:
     restart: unless-stopped
     volumes:
       - /home/iniwa/docker/discord-calendar/data:/data
+      - /home/iniwa/docker/discord-calendar/service_account.json:/usr/src/app/service_account.json:ro
     environment:
       - DISCORD_BOT_TOKEN=
       - GEMINI_API_KEY=
-      # サービスアカウントのJSONキー内容を1行で設定
-      - GOOGLE_CREDENTIALS_JSON=
     user: "1000:1000"

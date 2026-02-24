@@ -13,25 +13,29 @@ from googleapiclient.errors import HttpError
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
 
+SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "/usr/src/app/service_account.json")
+
+
+def _load_service_account_info() -> dict:
+    """サービスアカウントのJSONファイルを読み込む"""
+    if not os.path.exists(SERVICE_ACCOUNT_FILE):
+        raise FileNotFoundError(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+    with open(SERVICE_ACCOUNT_FILE, 'r') as f:
+        return json.load(f)
+
+
 def get_service_account_email() -> str | None:
     """サービスアカウントのメールアドレスを取得する"""
-    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        return None
     try:
-        creds_data = json.loads(creds_json)
+        creds_data = _load_service_account_info()
         return creds_data.get("client_email")
-    except (json.JSONDecodeError, KeyError):
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
         return None
 
 
 def get_calendar_service() -> Resource:
     """サービスアカウントを使用してGoogle Calendar APIサービスを返す"""
-    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable is not set.")
-
-    creds_data = json.loads(creds_json)
+    creds_data = _load_service_account_info()
     creds = service_account.Credentials.from_service_account_info(creds_data, scopes=SCOPES)
     service = build('calendar', 'v3', credentials=creds)
     return service
