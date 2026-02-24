@@ -6,6 +6,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 import logging
 import json
+import aiohttp
 
 # ローカルモジュールのインポート
 import database as db
@@ -19,6 +20,7 @@ logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+BOT_ADMIN_ID = os.getenv("BOT_ADMIN_ID")
 
 # -------------------------------------
 # 1. Discord Botの基本設定
@@ -45,6 +47,31 @@ async def _require_dm(interaction: discord.Interaction) -> bool:
         ephemeral=True
     )
     return False
+
+
+def _is_admin(interaction: discord.Interaction) -> bool:
+    """管理者かどうかを判定する"""
+    return BOT_ADMIN_ID and str(interaction.user.id) == BOT_ADMIN_ID
+
+
+async def _send_error_webhook(error_type: str):
+    """エラー発生時にWebhookで通知を送信する（詳細は非表示）"""
+    webhook_url = db.get_setting("error_webhook_url")
+    if not webhook_url:
+        return
+
+    payload = {
+        "content": f"⚠️ カレンダーBotでエラーが発生しました: **{error_type}**"
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(webhook_url, json=payload) as resp:
+                if resp.status >= 400:
+                    logging.error(f"Webhook送信失敗: HTTP {resp.status}")
+    except Exception as e:
+        logging.error(f"Webhook送信エラー: {e}")
+
 
 # -------------------------------------
 # 2. 定期実行タスク
@@ -209,6 +236,65 @@ async def cancel_command(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("現在、進行中の作業はありません。")
 
+
+@bot.tree.command(name="webhook", description="エラー通知用のWebhook URLを登録します。（管理者のみ）")
+@app_commands.describe(url="Discord Webhook URL")
+async def webhook_command(interaction: discord.Interaction, url: str):
+    if not await _require_dm(interaction):
+        return
+
+    if not _is_admin(interaction):
+        await interaction.response.send_message("⚠️ このコマンドはBot管理者のみ実行できます。")
+        return
+
+    db.save_setting("error_webhook_url", url.strip())
+    await interaction.response.send_message("✅ エラー通知用Webhook URLを登録しました。")
+
+
+@bot.tree.command(name="webhook_remove", description="エラー通知用のWebhook URLを解除します。（管理者のみ）")
+async def webhook_remove_command(interaction: discord.Interaction):
+    if not await _require_dm(interaction):
+        return
+
+    if not _is_admin(interaction):
+        await interaction.response.send_message("⚠️ このコマンドはBot管理者のみ実行できます。")
+        return
+
+    deleted = db.delete_setting("error_webhook_url")
+    if deleted:
+        await interaction.response.send_message("✅ Webhook URLを解除しました。")
+    else:
+        await interaction.response.send_message("Webhook URLは登録されていません。")
+
+
+@bot.tree.command(name="webhook_test", description="Webhook通知のテスト送信を行います。（管理者のみ）")
+async def webhook_test_command(interaction: discord.Interaction):
+    if not await _require_dm(interaction):
+        return
+
+    if not _is_admin(interaction):
+        await interaction.response.send_message("⚠️ このコマンドはBot管理者のみ実行できます。")
+        return
+
+    webhook_url = db.get_setting("error_webhook_url")
+    if not webhook_url:
+        await interaction.response.send_message("⚠️ Webhook URLが登録されていません。先に `/webhook <URL>` で登録してください。")
+        return
+
+    await interaction.response.defer()
+
+    payload = {"content": "✅ カレンダーBotのWebhook通知テストです。正常に動作しています。"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(webhook_url, json=payload) as resp:
+                if resp.status < 400:
+                    await interaction.followup.send("✅ テスト通知を送信しました。Webhook先を確認してください。")
+                else:
+                    await interaction.followup.send(f"❌ 送信失敗: HTTP {resp.status}。URLが正しいか確認してください。")
+    except Exception:
+        await interaction.followup.send("❌ 送信に失敗しました。URLが正しいか確認してください。")
+
+
 # -------------------------------------
 # 5. メッセージ処理 (DM限定)
 # -------------------------------------
@@ -231,6 +317,11 @@ async def on_message(message: discord.Message):
 
     # --- 待機状態の場合の処理 ---
 
+    # レート制限チェック
+    if not db.check_rate_limit(discord_id):
+        await message.reply("⏳ 1分間に1回のみ利用できます。しばらくお待ちください。")
+        return
+
     # 状態をクリアして多重処理を防ぐ
     db.clear_user_state(discord_id)
 
@@ -249,6 +340,7 @@ async def on_message(message: discord.Message):
 
         if gemini_error:
             await message.reply(f"⚠️ **解析失敗 (Gemini)**\nAIからの応答:\n```text\n{gemini_error}\n```")
+            await _send_error_webhook("Gemini API解析失敗")
             return
 
         if not event_details:
@@ -265,6 +357,7 @@ async def on_message(message: discord.Message):
         except Exception as e:
             logging.error(f"Failed to get calendar service: {e}")
             await message.reply(f"❌ **Googleカレンダーへの接続に失敗しました**\n```text\n{e}\n```")
+            await _send_error_webhook("Googleカレンダー接続失敗")
             return
 
         # 3. 各イベントをループで登録
@@ -282,6 +375,7 @@ async def on_message(message: discord.Message):
 
             if created_event and created_event.get('htmlLink'):
                 success_count += 1
+                db.update_last_used(discord_id)
                 embed = discord.Embed(
                     title=f"✅ カレンダー登録成功 ({i}/{total_events})",
                     description=f"**{created_event.get('summary', 'N/A')}**",
@@ -294,6 +388,7 @@ async def on_message(message: discord.Message):
                 await message.reply(embed=embed)
             else:
                 error_count += 1
+                await _send_error_webhook("カレンダーイベント登録失敗")
                 error_embed = discord.Embed(
                     title=f"❌ カレンダー登録エラー ({i}/{total_events})",
                     description=f"予定: `{event_data.get('summary', 'N/A')}`",

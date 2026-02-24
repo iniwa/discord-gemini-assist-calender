@@ -9,4 +9,5 @@ services:
     environment:
       - DISCORD_BOT_TOKEN=
       - GEMINI_API_KEY=
+      - BOT_ADMIN_ID=
     user: "1000:1000"
